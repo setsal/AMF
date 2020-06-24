@@ -18,3 +18,7 @@ output/
 *.njsproj
 *.sln
 
+
+# go-AMF LOG
+httpd.log
+go-AMF

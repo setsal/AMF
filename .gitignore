@@ -22,3 +22,6 @@ output/
 # go-AMF LOG
 httpd.log
 go-AMF
+
+# Secure File
+.go-AMF.yaml

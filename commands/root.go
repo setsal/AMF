@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/setsal/go-AMF/util"
 	"github.com/spf13/cobra"
@@ -22,8 +23,7 @@ var RootCmd = &cobra.Command{
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	// 暫時不知這行用意
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.go-amf.yaml)")
+	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $PROJECT/.go-AMF.yaml)")
 	RootCmd.PersistentFlags().String("log-dir", "", "/path/to/log")
 
 	viper.BindPFlag("log-dir", RootCmd.PersistentFlags().Lookup("log-dir"))
@@ -32,16 +32,21 @@ func init() {
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
+
+	// add config path in current project dir
+	viper.SetConfigType("yaml")
+
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
-		viper.SetConfigName(".go-cvemap")
+		viper.SetConfigName(".go-AMF")
+		viper.AddConfigPath(os.Getenv("PWD"))
+	}
+
+	err := viper.ReadInConfig()
+	if err != nil { // Handle errors reading the config file
+		panic(fmt.Errorf("Fatal error config file: %s", err))
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match
-
-	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("Using config file:", viper.ConfigFileUsed())
-	}
 }

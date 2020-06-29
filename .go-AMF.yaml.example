@@ -1,0 +1,13 @@
+# Used for slack action
+slack_oauth_token: ""
+slack_token: ""
+slack_channel_id: ""
+
+# Used for line action
+line_token: ""
+line_secret: ""
+line_group_id: ""
+
+# Used for Telegram action
+telegram_token: ""
+telegram_chat_id: 

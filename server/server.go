@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,7 +28,22 @@ func Start(logDir string) error {
 
 	// Initial the bot api
 	slackAPI = slack.New(viper.GetString("slack_oauth_token"))
+
+	// Initail telegram
 	telegramAPI, _ = tgbotapi.NewBotAPI(viper.GetString("telegram_token"))
+	_, err := telegramAPI.SetWebhook(tgbotapi.NewWebhook(viper.GetString("telegram_webhook_url")))
+	if err != nil {
+		log.Fatal(err)
+	}
+	info, err := telegramAPI.GetWebhookInfo()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if info.LastErrorDate != 0 {
+		log.Printf("[Telegram callback failed] %s", info.LastErrorMessage)
+	}
+
+	// Initial line bot
 	lineAPI, _ = linebot.New(viper.GetString("line_secret"), viper.GetString("line_token"))
 
 	// Run echo web server
@@ -59,6 +75,7 @@ func Start(logDir string) error {
 	e.GET("/health", health())
 	e.POST("/api/slack", slackHandler())
 	e.POST("/api/line", lineHandler())
+	e.POST("/api/telegram", telegramHandler())
 
 	bindURL := fmt.Sprintf("%s:%s", viper.GetString("bind"), viper.GetString("port"))
 	log.Infof("Listening on %s", bindURL)
@@ -79,7 +96,7 @@ func slackHandler() echo.HandlerFunc {
 		buf.ReadFrom(c.Request().Body)
 		body := buf.String()
 
-		eventsAPIEvent, e := slackevents.ParseEvent(json.RawMessage(body), slackevents.OptionVerifyToken(&slackevents.TokenComparator{VerificationToken: "9fkWyrP7W2lmfHYyAbNFDyYg"}))
+		eventsAPIEvent, e := slackevents.ParseEvent(json.RawMessage(body), slackevents.OptionVerifyToken(&slackevents.TokenComparator{VerificationToken: viper.GetString("slack_token")}))
 		if e != nil {
 			return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid credentials")
 		}
@@ -137,6 +154,23 @@ func lineHandler() echo.HandlerFunc {
 	}
 }
 
+func telegramHandler() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		bytes, err := ioutil.ReadAll(c.Request().Body)
+
+		var update tgbotapi.Update
+		err = json.Unmarshal(bytes, &update)
+		if err != nil {
+			log.Error(err)
+		}
+
+		log.Infof("From: %s Text: %s\n", update.Message.From.UserName, update.Message.Text)
+		AMF(TELEGRAM, update.Message.Text, update.Message.From.UserName)
+
+		return c.String(http.StatusOK, "")
+	}
+}
+
 type ChatApp int
 
 const (
@@ -161,7 +195,7 @@ func (c ChatApp) String() string {
 // AMF handle main function
 func AMF(which ChatApp, MsgText string, User string) {
 	log.Infof("[%s] Receive \"%s\" from %s.", ChatApp(which), MsgText, User)
-	msg := MsgText + "\n```FROM [" + ChatApp(which).String() + "] BY " + User + " ヾ(*´∇`)ﾉ```"
+	msg := MsgText + "\n<FROM [" + ChatApp(which).String() + "] BY " + User + ">"
 	switch which {
 	case LINE:
 		TelegramSendMsg(msg)

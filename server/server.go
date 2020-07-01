@@ -19,23 +19,37 @@ import (
 	"github.com/spf13/viper"
 )
 
-var slackAPI *slack.Client
-var lineAPI *linebot.Client
-var telegramAPI *tgbotapi.BotAPI
+// var slackAPI *slack.Client
+// var lineAPI *linebot.Client
+// var telegramAPI *tgbotapi.BotAPI
 
-// Start Requests handler HTTP Server.
-func Start(logDir string) error {
-
+// InitalBot then return  我嘗試在切開一點點看看
+func InitialBots() (sApi *slack.Client, lApi *linebot.Client, tApi *tgbotapi.BotAPI) {
 	// Initial the bot api
-	slackAPI = slack.New(viper.GetString("slack_oauth_token"))
-
-	// Initail telegram
-	telegramAPI, _ = tgbotapi.NewBotAPI(viper.GetString("telegram_token"))
-	_, err := telegramAPI.SetWebhook(tgbotapi.NewWebhook(viper.GetString("telegram_webhook_url")))
+	sApi = InitialSlackBot(viper.GetString("slack_oauth_token"))
+	tApi, err := InitialTelegramBot(viper.GetString("telegram_token"), viper.GetString("telegram_webhook_url"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	info, err := telegramAPI.GetWebhookInfo()
+	lApi, err = InitialLineBot(viper.GetString("line_secret"), viper.GetString("line_token"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	return
+}
+func InitialSlackBot(Token string) *slack.Client {
+	// Initial the bot api
+	return slack.New(Token)
+}
+
+func InitialTelegramBot(Token string, WebhookURL string) (*tgbotapi.BotAPI, error) {
+	// Initail telegram
+	tApi, _ := tgbotapi.NewBotAPI(Token)
+	_, err := tApi.SetWebhook(tgbotapi.NewWebhook(WebhookURL))
+	if err != nil {
+		log.Fatal(err)
+	}
+	info, err := tApi.GetWebhookInfo()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -43,8 +57,18 @@ func Start(logDir string) error {
 		log.Printf("[Telegram callback failed] %s", info.LastErrorMessage)
 	}
 
+	return tApi, err
+}
+
+func InitialLineBot(Secret string, Token string) (*linebot.Client, error) {
 	// Initial line bot
-	lineAPI, _ = linebot.New(viper.GetString("line_secret"), viper.GetString("line_token"))
+	return linebot.New(Secret, Token)
+}
+
+// Start Requests handler HTTP Server.
+func Start(logDir string) error {
+	// InitalBot then return  我嘗試在切開一點點看看
+	slackAPI, lineAPI, telegramAPI := InitialBots()
 
 	// Run echo web server
 	e := echo.New()
@@ -73,9 +97,9 @@ func Start(logDir string) error {
 
 	// Routes
 	e.GET("/health", health())
-	e.POST("/api/slack", slackHandler())
-	e.POST("/api/line", lineHandler())
-	e.POST("/api/telegram", telegramHandler())
+	e.POST("/api/slack", slackHandler(slackAPI, lineAPI, telegramAPI))
+	e.POST("/api/line", lineHandler(slackAPI, lineAPI, telegramAPI))
+	e.POST("/api/telegram", telegramHandler(slackAPI, lineAPI, telegramAPI))
 
 	bindURL := fmt.Sprintf("%s:%s", viper.GetString("bind"), viper.GetString("port"))
 	log.Infof("Listening on %s", bindURL)
@@ -90,7 +114,7 @@ func health() echo.HandlerFunc {
 	}
 }
 
-func slackHandler() echo.HandlerFunc {
+func slackHandler(slackAPI *slack.Client, lineAPI *linebot.Client, telegramAPI *tgbotapi.BotAPI) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(c.Request().Body)
@@ -114,39 +138,54 @@ func slackHandler() echo.HandlerFunc {
 			innerEvent := eventsAPIEvent.InnerEvent
 			switch ev := innerEvent.Data.(type) {
 			case *slackevents.MessageEvent:
-				if ev.Username != "writeupBot" {
+				if ev.Username != "AMF" {
+					log.Infof("[INFO] %+v\n", ev.User)
 					user, err := slackAPI.GetUserInfo(ev.User)
 					if err != nil {
 						log.Errorf("[ERROR] %s\n", err)
 					}
 					log.Infof("[INFO] Try to send message %s %s\n", ev.Text, user.RealName)
-					AMF(SLACK, ev.Text, user.RealName)
+					AMF(SLACK, ev.Text, user.RealName, slackAPI, lineAPI, telegramAPI)
 					return c.String(http.StatusOK, "")
 				}
 			}
 		}
 
-		return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid credentials")
+		return c.String(http.StatusOK, "")
 	}
 }
 
-func lineHandler() echo.HandlerFunc {
+func lineHandler(slackAPI *slack.Client, lineAPI *linebot.Client, telegramAPI *tgbotapi.BotAPI) echo.HandlerFunc {
 	return func(c echo.Context) error {
 
 		events, err := lineAPI.ParseRequest(c.Request())
+		// return c.String(http.StatusOK, "")
 		if err != nil {
-			return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid credentials")
+			// return c.String(http.StatusOK, "")
+			if err == linebot.ErrInvalidSignature {
+				return echo.NewHTTPError(400, "")
+				//w.WriteHeader(400)
+			} else {
+				return echo.NewHTTPError(500, "")
+				//w.WriteHeader(500)
+			}
+			//return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid credentials")
 		}
-
+		// return c.String(http.StatusOK, "")
 		for _, event := range events {
 			if event.Type == linebot.EventTypeMessage {
 				switch message := event.Message.(type) {
 				case *linebot.TextMessage:
 					res, err := lineAPI.GetGroupMemberProfile(event.Source.GroupID, event.Source.UserID).Do()
 					if err != nil {
-						return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid credentials")
+						res, err = lineAPI.GetProfile(event.Source.UserID).Do()
+						if err != nil {
+							//??
+						}
+						// return c.String(http.StatusOK, "")
+						//return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid credentials")
 					}
-					AMF(LINE, message.Text, res.DisplayName)
+					AMF(LINE, message.Text, res.DisplayName, slackAPI, lineAPI, telegramAPI)
 				}
 			}
 		}
@@ -154,7 +193,7 @@ func lineHandler() echo.HandlerFunc {
 	}
 }
 
-func telegramHandler() echo.HandlerFunc {
+func telegramHandler(slackAPI *slack.Client, lineAPI *linebot.Client, telegramAPI *tgbotapi.BotAPI) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		bytes, err := ioutil.ReadAll(c.Request().Body)
 
@@ -164,8 +203,9 @@ func telegramHandler() echo.HandlerFunc {
 			log.Error(err)
 		}
 
-		log.Infof("From: %s Text: %s\n", update.Message.From.UserName, update.Message.Text)
-		AMF(TELEGRAM, update.Message.Text, update.Message.From.UserName)
+		userName := update.Message.From.LastName + " " + update.Message.From.FirstName
+		log.Infof("From: %s Text: %s\n", userName, update.Message.Text)
+		AMF(TELEGRAM, update.Message.Text, userName, slackAPI, lineAPI, telegramAPI)
 
 		return c.String(http.StatusOK, "")
 	}
@@ -193,43 +233,51 @@ func (c ChatApp) String() string {
 }
 
 // AMF handle main function
-func AMF(which ChatApp, MsgText string, User string) {
+func AMF(which ChatApp, MsgText string, User string, slackAPI *slack.Client, lineAPI *linebot.Client, telegramAPI *tgbotapi.BotAPI) string {
 	log.Infof("[%s] Receive \"%s\" from %s.", ChatApp(which), MsgText, User)
-	msg := MsgText + "\n<FROM [" + ChatApp(which).String() + "] BY " + User + ">"
+	msg := MsgText + "\n> [" + ChatApp(which).String() + "] " + User + "📍"
 	switch which {
 	case LINE:
-		TelegramSendMsg(msg)
-		SlackSendMsg(msg)
+		TelegramSendMsg(telegramAPI, msg)
+		SlackSendMsg(slackAPI, msg)
 	case TELEGRAM:
-		LineSendMsg(msg)
-		SlackSendMsg(msg)
+		LineSendMsg(lineAPI, linebot.NewTextMessage(msg))
+		SlackSendMsg(slackAPI, msg)
 	case SLACK:
-		TelegramSendMsg(msg)
-		LineSendMsg(msg)
+		TelegramSendMsg(telegramAPI, msg)
+		LineSendMsg(lineAPI, linebot.NewTextMessage(msg))
 	}
+	return msg
 }
 
 // TelegramSendMsg Send Messgae to Telegram
-func TelegramSendMsg(MsgText string) {
-	if _, err := telegramAPI.Send(tgbotapi.NewMessage(viper.GetInt64("telegram_chat_id"), MsgText)); err != nil {
+func TelegramSendMsg(telegramAPI *tgbotapi.BotAPI, MsgText string) (tgbotapi.Message, error) {
+	res, err := telegramAPI.Send(tgbotapi.NewMessage(viper.GetInt64("telegram_chat_id"), MsgText))
+	if err != nil {
 		log.Errorf("[ERROR] %s\n", err)
+		return res, err
 	}
 	log.Infof("[Telegram] Send %s", MsgText)
+	return res, nil
 }
 
 // LineSendMsg Send Messgae to Line
-func LineSendMsg(MsgText string) {
-	if _, err := lineAPI.PushMessage(viper.GetString("line_group_id"), linebot.NewTextMessage(MsgText)).Do(); err != nil {
+func LineSendMsg(lineAPI *linebot.Client, TextMessage *linebot.TextMessage) error {
+	_, err := lineAPI.PushMessage(viper.GetString("line_group_id"), TextMessage).Do()
+	if err != nil {
 		log.Errorf("[ERROR] %s\n", err)
+		return err
 	}
-	log.Infof("[LINE] Send %s", MsgText)
+	log.Infof("[LINE] Send %s", TextMessage.Text)
+	return nil
 }
 
 // SlackSendMsg Send Messgae to Slack
-func SlackSendMsg(MsgText string) {
-	_, _, err := slackAPI.PostMessage(viper.GetString("slack_channel_id"), slack.MsgOptionText(MsgText, false))
-	if err != nil {
+func SlackSendMsg(slackAPI *slack.Client, MsgText string) error {
+	if _, _, err := slackAPI.PostMessage(viper.GetString("slack_channel_id"), slack.MsgOptionText(MsgText, false)); err != nil {
 		log.Errorf("[ERROR] %s\n", err)
+		return err
 	}
 	log.Infof("[Slack] Send %s", MsgText)
+	return nil
 }
